@@ -442,28 +442,62 @@ download_whonix_template() {
         return 0
     fi
     
+    # If we have a download but no extracted file, try to extract it
+    if [ -f "$download_path" ] && [ ! -f "$extracted_path" ]; then
+        print_info "Found existing download, extracting..."
+        if xz -d -k "$download_path" 2>/dev/null; then
+            print_success "Extraction completed"
+            return 0
+        else
+            print_warning "Failed to extract existing download, re-downloading..."
+            rm -f "$download_path" "$checksum_path" 2>/dev/null || true
+        fi
+    fi
+    
     if [ -f "$download_path" ]; then
         print_info "Found existing download, verifying and extracting..."
+        local needs_redownload=false
+        
         # Verify checksum if available
         if [ -f "$checksum_path" ]; then
             print_info "Verifying checksum..."
-            cd /root
-            if ! echo "$(cat $checksum_path)  $download_path" | sha256sum -c --quiet; then
-                print_warning "Checksum verification failed, re-downloading..."
-                rm -f "$download_path" "$checksum_path"
+            # Handle different checksum formats
+            if grep -q "SHA256" "$checksum_path" || grep -q "\.xz" "$checksum_path"; then
+                # Standard SHA256 format with filename
+                if ! sha256sum -c "$checksum_path" --quiet 2>/dev/null; then
+                    print_warning "Checksum verification failed, re-downloading..."
+                    needs_redownload=true
+                else
+                    print_success "Checksum verified"
+                fi
             else
-                print_success "Checksum verified"
+                # Try alternative verification method
+                local expected_checksum=$(head -n 1 "$checksum_path" | cut -d' ' -f1)
+                if [ -n "$expected_checksum" ]; then
+                    local actual_checksum=$(sha256sum "$download_path" | cut -d' ' -f1)
+                    if [ "$expected_checksum" = "$actual_checksum" ]; then
+                        print_success "Checksum verified"
+                    else
+                        print_warning "Checksum verification failed, re-downloading..."
+                        needs_redownload=true
+                    fi
+                else
+                    print_warning "Unable to parse checksum, re-downloading..."
+                    needs_redownload=true
+                fi
             fi
+        else
+            print_warning "No checksum file found, re-downloading for safety..."
+            needs_redownload=true
         fi
         
-        # Extract if not already extracted
-        if [ ! -f "$extracted_path" ]; then
-            xz -d -k "$download_path" || {
-                print_error "Failed to extract Whonix template"
-                return 1
-            }
+        # If checksum failed, clean up and re-download
+        if [ "$needs_redownload" = true ]; then
+            rm -f "$download_path" "$checksum_path" "$extracted_path" 2>/dev/null || true
+        elif [ -f "$extracted_path" ]; then
+            # If we have a valid download and extracted file, we're done
+            return 0
         fi
-        return 0
     fi
     
     if [ "$DRY_RUN" = true ]; then
@@ -552,10 +586,12 @@ download_whonix_template() {
     
     # Extract
     print_info "Extracting template..."
-    xz -d -k "$download_path" || {
+    if ! xz -d -k "$download_path"; then
         print_error "Failed to extract Whonix template"
+        # Clean up failed extraction
+        rm -f "$extracted_path" 2>/dev/null || true
         return 1
-    }
+    fi
     
     print_success "Whonix template downloaded and extracted"
     log_info "Downloaded Whonix template to $extracted_path"
