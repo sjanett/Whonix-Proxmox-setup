@@ -20,13 +20,27 @@ This script automates the deployment of Whonix, a privacy-focused virtual deskto
 
 ```bash
 # Download the script
-wget https://raw.githubusercontent.com/yourusername/whonix-proxmox-script/main/whonix-proxmox-setup.sh
+wget https://raw.githubusercontent.com/sjanett/Whonix-Proxmox-setup/main/whonix-proxmox-setup.sh
 
 # Make it executable
 chmod +x whonix-proxmox-setup.sh
 
 # Run the script
 ./whonix-proxmox-setup.sh
+```
+
+### One-Line Installation
+
+For a quick installation, you can use the following one-line command:
+
+```bash
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/sjanett/Whonix-Proxmox-setup/main/whonix-proxmox-setup.sh)"
+```
+
+Or using wget:
+
+```bash
+bash -c "$(wget -qO- https://raw.githubusercontent.com/sjanett/Whonix-Proxmox-setup/main/whonix-proxmox-setup.sh)"
 ```
 
 ## Configuration
