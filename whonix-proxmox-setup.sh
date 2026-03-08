@@ -519,7 +519,7 @@ download_whonix_template() {
     if ! wget --progress=bar:force -O "$download_path" "$WHONIX_DOWNLOAD_URL"; then
         print_error "Failed to download Whonix template"
         return 1
-    }
+    fi
     
     # Verify checksum
     if [ -f "$checksum_path" ]; then
