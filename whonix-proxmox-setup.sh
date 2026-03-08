@@ -17,9 +17,15 @@ set -o pipefail
 VERSION="1.0.1"
 SCRIPT_NAME="whonix-proxmox-setup.sh"
 LOG_FILE="/var/log/whonix-setup.log"
-WHONIX_DOWNLOAD_URL="https://download.whonix.org/whonix-xfce-17.2.2/Whonix-Xfce-17.2.2.Intel_AMD64.ova.xz"
-WHONIX_CHECKSUM_URL="https://download.whonix.org/whonix-xfce-17.2.2/Whonix-Xfce-17.2.2.Intel_AMD64.ova.xz.asc"
-WHONIX_VERSION="17.2.2"
+# Whonix Gateway download URLs
+GATEWAY_DOWNLOAD_URL="https://mirrors.dotsrc.org/whonix/libvirt/18.1.4.2/Whonix-Gateway-18.1.4.2.qcow2.xz"
+GATEWAY_CHECKSUM_URL="https://mirrors.dotsrc.org/whonix/libvirt/18.1.4.2/Whonix-Gateway-18.1.4.2.qcow2.xz.asc"
+
+# Whonix Workstation download URLs
+WORKSTATION_DOWNLOAD_URL="https://mirrors.dotsrc.org/whonix/libvirt/18.1.4.2/Whonix-Workstation-18.1.4.2.qcow2.xz"
+WORKSTATION_CHECKSUM_URL="https://mirrors.dotsrc.org/whonix/libvirt/18.1.4.2/Whonix-Workstation-18.1.4.2.qcow2.xz.asc"
+
+WHONIX_VERSION="18.1.4.2"
 
 # =============================================================================
 # DEFAULT CONFIGURATION - User configurable section
@@ -429,46 +435,73 @@ EOF
 # DOWNLOAD FUNCTIONS
 # =============================================================================
 
-download_whonix_template() {
-    local download_path="/root/whonix.ova.xz"
-    local extracted_path="/root/whonix.ova"
-    local checksum_path="/root/whonix.sha256"
+download_whonix_images() {
+    local gateway_download_path="/root/whonix-gateway.qcow2.xz"
+    local gateway_extracted_path="/root/whonix-gateway.qcow2"
+    local gateway_checksum_path="/root/whonix-gateway.sha256"
     
-    print_step "Downloading Whonix template..."
-    
+    local workstation_download_path="/root/whonix-workstation.qcow2.xz"
+    local workstation_extracted_path="/root/whonix-workstation.qcow2"
+    local workstation_checksum_path="/root/whonix-workstation.sha256"
+
+    print_step "Downloading Whonix images..."
+
+    # Download Gateway image
+    if ! download_single_image "Gateway" "$GATEWAY_DOWNLOAD_URL" "$GATEWAY_CHECKSUM_URL" "$gateway_download_path" "$gateway_extracted_path" "$gateway_checksum_path"; then
+        return 1
+    fi
+
+    # Download Workstation image
+    if ! download_single_image "Workstation" "$WORKSTATION_DOWNLOAD_URL" "$WORKSTATION_CHECKSUM_URL" "$workstation_download_path" "$workstation_extracted_path" "$workstation_checksum_path"; then
+        return 1
+    fi
+
+    print_success "All Whonix images downloaded and extracted"
+}
+
+download_single_image() {
+    local image_type="$1"
+    local download_url="$2"
+    local checksum_url="$3"
+    local download_path="$4"
+    local extracted_path="$5"
+    local checksum_path="$6"
+
+    print_info "Downloading Whonix $image_type image..."
+
     # Check if already downloaded and valid
     if [ -f "$extracted_path" ]; then
-        print_info "Whonix template already downloaded"
+        print_info "Whonix $image_type image already downloaded"
         return 0
     fi
     
     # If we have a download but no extracted file, try to extract it
     if [ -f "$download_path" ] && [ ! -f "$extracted_path" ]; then
-        print_info "Found existing download, extracting..."
+        print_info "Found existing $image_type download, extracting..."
         if xz -d -k "$download_path" 2>/dev/null; then
-            print_success "Extraction completed"
+            print_success "$image_type extraction completed"
             return 0
         else
-            print_warning "Failed to extract existing download, re-downloading..."
+            print_warning "Failed to extract existing $image_type download, re-downloading..."
             rm -f "$download_path" "$checksum_path" 2>/dev/null || true
         fi
     fi
-    
+
     if [ -f "$download_path" ]; then
-        print_info "Found existing download, verifying and extracting..."
+        print_info "Found existing $image_type download, verifying..."
         local needs_redownload=false
-        
+
         # Verify checksum if available
         if [ -f "$checksum_path" ]; then
-            print_info "Verifying checksum..."
+            print_info "Verifying $image_type checksum..."
             # Handle different checksum formats
             if grep -q "SHA256" "$checksum_path" || grep -q "\.xz" "$checksum_path"; then
                 # Standard SHA256 format with filename
                 if ! sha256sum -c "$checksum_path" --quiet 2>/dev/null; then
-                    print_warning "Checksum verification failed, re-downloading..."
+                    print_warning "$image_type checksum verification failed, re-downloading..."
                     needs_redownload=true
                 else
-                    print_success "Checksum verified"
+                    print_success "$image_type checksum verified"
                 fi
             else
                 # Try alternative verification method
@@ -476,21 +509,21 @@ download_whonix_template() {
                 if [ -n "$expected_checksum" ]; then
                     local actual_checksum=$(sha256sum "$download_path" | cut -d' ' -f1)
                     if [ "$expected_checksum" = "$actual_checksum" ]; then
-                        print_success "Checksum verified"
+                        print_success "$image_type checksum verified"
                     else
-                        print_warning "Checksum verification failed, re-downloading..."
+                        print_warning "$image_type checksum verification failed, re-downloading..."
                         needs_redownload=true
                     fi
                 else
-                    print_warning "Unable to parse checksum, re-downloading..."
+                    print_warning "Unable to parse $image_type checksum, re-downloading..."
                     needs_redownload=true
                 fi
             fi
         else
-            print_warning "No checksum file found, re-downloading for safety..."
+            print_warning "No $image_type checksum file found, re-downloading for safety..."
             needs_redownload=true
         fi
-        
+
         # If checksum failed, clean up and re-download
         if [ "$needs_redownload" = true ]; then
             rm -f "$download_path" "$checksum_path" "$extracted_path" 2>/dev/null || true
@@ -499,72 +532,35 @@ download_whonix_template() {
             return 0
         fi
     fi
-    
+
     if [ "$DRY_RUN" = true ]; then
-        print_info "[DRY-RUN] Would download Whonix template from $WHONIX_DOWNLOAD_URL"
+        print_info "[DRY-RUN] Would download Whonix $image_type from $download_url"
         return 0
     fi
-    
-    # Try to resolve the domain first
-    print_info "Testing connectivity to download.whonix.org..."
-    if ! wget --spider "$WHONIX_DOWNLOAD_URL" >/dev/null 2>&1; then
-        print_warning "Primary download URL failed, trying alternative mirrors..."
-        # Fallback URLs
-        local fallback_urls=(
-            "https://github.com/Whonix/Whonix/releases/download/v17.2.2/Whonix-Xfce-17.2.2.Intel_AMD64.ova.xz"
-            "https://ftp.osuosl.org/pub/whonix/whonix-xfce-17.2.2/Whonix-Xfce-17.2.2.Intel_AMD64.ova.xz"
-            "https://download.whonix.org/whonix-xfce-17.2.2/Whonix-Xfce-17.2.2.Intel_AMD64.ova.xz"
-        )
-        
-        local fallback_checksum_urls=(
-            "https://github.com/Whonix/Whonix/releases/download/v17.2.2/Whonix-Xfce-17.2.2.Intel_AMD64.ova.xz.asc"
-            "https://ftp.osuosl.org/pub/whonix/whonix-xfce-17.2.2/Whonix-Xfce-17.2.2.Intel_AMD64.ova.xz.asc"
-            "https://download.whonix.org/whonix-xfce-17.2.2/Whonix-Xfce-17.2.2.Intel_AMD64.ova.xz.asc"
-        )
-        
-        local url_index=0
-        local download_success=false
-        
-        for fallback_url in "${fallback_urls[@]}"; do
-            print_info "Trying fallback URL: $fallback_url"
-            if wget --spider "$fallback_url" >/dev/null 2>&1; then
-                WHONIX_DOWNLOAD_URL="$fallback_url"
-                WHONIX_CHECKSUM_URL="${fallback_checksum_urls[$url_index]}"
-                download_success=true
-                break
-            fi
-            ((url_index++))
-        done
-        
-        if [ "$download_success" = false ]; then
-            print_error "Unable to connect to any download URLs. Please check your network connection."
-            return 1
-        fi
-    fi
-    
+
     # Download checksum first
-    print_info "Downloading checksum from: $WHONIX_CHECKSUM_URL"
-    if ! wget --progress=bar:force -O "$checksum_path" "$WHONIX_CHECKSUM_URL"; then
-        print_warning "Failed to download checksum, continuing without verification"
+    print_info "Downloading $image_type checksum from: $checksum_url"
+    if ! wget --progress=bar:force -O "$checksum_path" "$checksum_url"; then
+        print_warning "Failed to download $image_type checksum, continuing without verification"
     fi
-    
+
     # Download with progress
-    print_info "Downloading from: $WHONIX_DOWNLOAD_URL"
-    if ! wget --progress=bar:force -O "$download_path" "$WHONIX_DOWNLOAD_URL"; then
-        print_error "Failed to download Whonix template"
+    print_info "Downloading $image_type from: $download_url"
+    if ! wget --progress=bar:force -O "$download_path" "$download_url"; then
+        print_error "Failed to download Whonix $image_type"
         return 1
     fi
-    
+
     # Verify checksum
     if [ -f "$checksum_path" ]; then
-        print_info "Verifying checksum..."
+        print_info "Verifying $image_type checksum..."
         # Handle different checksum formats
         if grep -q "SHA256" "$checksum_path" || grep -q "\.xz" "$checksum_path"; then
             # Standard SHA256 format with filename
             if sha256sum -c "$checksum_path" --quiet 2>/dev/null; then
-                print_success "Checksum verified"
+                print_success "$image_type checksum verified"
             else
-                print_warning "Checksum verification failed, but continuing..."
+                print_warning "$image_type checksum verification failed, but continuing..."
             fi
         else
             # Try alternative verification method
@@ -572,29 +568,29 @@ download_whonix_template() {
             if [ -n "$expected_checksum" ]; then
                 local actual_checksum=$(sha256sum "$download_path" | cut -d' ' -f1)
                 if [ "$expected_checksum" = "$actual_checksum" ]; then
-                    print_success "Checksum verified"
+                    print_success "$image_type checksum verified"
                 else
-                    print_warning "Checksum verification failed, but continuing..."
+                    print_warning "$image_type checksum verification failed, but continuing..."
                 fi
             else
-                print_warning "Unable to parse checksum, skipping verification"
+                print_warning "Unable to parse $image_type checksum, skipping verification"
             fi
         fi
     else
-        print_warning "Skipping checksum verification"
+        print_warning "Skipping $image_type checksum verification"
     fi
-    
+
     # Extract
-    print_info "Extracting template..."
+    print_info "Extracting $image_type image..."
     if ! xz -d -k "$download_path"; then
-        print_error "Failed to extract Whonix template"
+        print_error "Failed to extract Whonix $image_type"
         # Clean up failed extraction
         rm -f "$extracted_path" 2>/dev/null || true
         return 1
     fi
-    
-    print_success "Whonix template downloaded and extracted"
-    log_info "Downloaded Whonix template to $extracted_path"
+
+    print_success "Whonix $image_type image downloaded and extracted"
+    log_info "Downloaded Whonix $image_type to $extracted_path"
 }
 
 # =============================================================================
@@ -655,19 +651,31 @@ create_vm() {
         return 1
     fi
     
-    # Import disk from OVA
+    # Import disk from QCOW2
     print_info "Importing disk for $vm_name..."
-    if [ ! -f "/root/whonix.ova" ]; then
-        print_error "Whonix OVA file not found at /root/whonix.ova"
+    
+    local disk_path=""
+    if [[ "$vm_name" == *"Gateway"* ]]; then
+        disk_path="/root/whonix-gateway.qcow2"
+    elif [[ "$vm_name" == *"Workstation"* ]]; then
+        disk_path="/root/whonix-workstation.qcow2"
+    else
+        print_error "Cannot determine disk type for $vm_name"
         return 1
     fi
-    
-    if ! qm importdisk $vm_id "/root/whonix.ova" $STORAGE_DISK; then
+
+    if [ ! -f "$disk_path" ]; then
+        print_error "Whonix $vm_name disk not found at $disk_path"
+        return 1
+    fi
+
+    # Import the disk
+    if ! qm importdisk $vm_id "$disk_path" $STORAGE_DISK --format qcow2; then
         print_error "Failed to import disk for $vm_name"
         return 1
     fi
-    
-    # Find the imported disk name (it might not be vm-$vm_id-disk-0)
+
+    # Find the imported disk name
     local disk_name=""
     for i in {0..9}; do
         if qm config $vm_id | grep -q "unused$i: ${STORAGE_DISK}:vm-${vm_id}-disk-"; then
@@ -675,20 +683,20 @@ create_vm() {
             break
         fi
     done
-    
+
     if [ -z "$disk_name" ]; then
         # Try alternative method to find disk
         local config_output=$(qm config $vm_id)
         if echo "$config_output" | grep -q "unused"; then
             disk_name=$(echo "$config_output" | grep "unused" | cut -d: -f1 | head -1)
         fi
-        
+
         if [ -z "$disk_name" ]; then
             print_error "Could not find imported disk for $vm_name"
             return 1
         fi
     fi
-    
+
     # Move disk from unused to scsi0
     print_info "Attaching disk to SCSI controller..."
     if ! qm move-disk $vm_id $disk_name scsi0 --delete true; then
@@ -700,12 +708,12 @@ create_vm() {
             return 1
         fi
     fi
-    
+
     # Set boot order
     if ! qm set $vm_id --boot order=scsi0; then
         print_warning "Failed to set boot order, continuing..."
     fi
-    
+
     print_success "VM $vm_name created successfully"
     log_info "Created VM $vm_name with ID $vm_id"
 }
@@ -947,8 +955,8 @@ main() {
     # Create internal bridge
     create_internal_bridge
     
-    # Download Whonix template
-    download_whonix_template
+    # Download Whonix images
+    download_whonix_images
     
     # Validate or get VM IDs
     if [ -n "$GATEWAY_VM_ID" ]; then
