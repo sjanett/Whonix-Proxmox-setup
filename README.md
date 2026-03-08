@@ -162,7 +162,12 @@ qm terminal <workstation-vm-id>
 
 **Download failures:**
 - Verify internet connectivity from the Proxmox host
+- The script now uses multiple fallback download sources
 - Try downloading the template manually and specify the path
+
+**Cluster deployment issues:**
+- The script now verifies it's running on the local node only
+- Will refuse to run on remote cluster nodes for safety
 
 ## Security Considerations
 

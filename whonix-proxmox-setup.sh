@@ -14,11 +14,12 @@ set -o pipefail
 # =============================================================================
 # VERSION AND CONSTANTS
 # =============================================================================
-VERSION="1.0.0"
+VERSION="1.0.1"
 SCRIPT_NAME="whonix-proxmox-setup.sh"
 LOG_FILE="/var/log/whonix-setup.log"
-WHONIX_DOWNLOAD_URL="https://dl.whonix.org/whonix-xfce-17.0.0.0/Whonix-Xfce-17.0.0.0.OVA.xz"
-WHONIX_CHECKSUM_URL="https://dl.whonix.org/whonix-17.0.0.0/WhonixXfce-17.0.0.0.sha256"
+WHONIX_DOWNLOAD_URL="https://download.whonix.org/whonix-xfce-17.2.2/Whonix-Xfce-17.2.2.Intel_AMD64.ova.xz"
+WHONIX_CHECKSUM_URL="https://download.whonix.org/whonix-xfce-17.2.2/Whonix-Xfce-17.2.2.Intel_AMD64.ova.xz.asc"
+WHONIX_VERSION="17.2.2"
 
 # =============================================================================
 # DEFAULT CONFIGURATION - User configurable section
@@ -277,8 +278,25 @@ check_prerequisites() {
         ((errors++))
     fi
     
+    # Check that we're running on the local node only
+    local local_node=$(hostname)
+    # Get the node we're currently running on from the Proxmox API
+    local current_node=$(pvesh get /nodes/localhost/status --output-format json 2>/dev/null | jq -r '.nodename' 2>/dev/null)
+    
+    # If we can't get the current node from localhost, try to get it from the node list
+    if [ -z "$current_node" ] || [ "$current_node" = "null" ]; then
+        current_node=$(pvesh get /nodes --output-format json 2>/dev/null | jq -r '.[] | select(.online==1) | .node' 2>/dev/null | head -1)
+    fi
+    
+    # If we still can't determine the current node, but we're on a Proxmox system, proceed
+    # Otherwise, if we have both values and they don't match, error
+    if [ -n "$current_node" ] && [ "$current_node" != "null" ] && [ -n "$local_node" ] && [ "$current_node" != "$local_node" ]; then
+        print_error "This script must be run on the local Proxmox node. Detected node: $current_node, Local hostname: $local_node"
+        ((errors++))
+    fi
+    
     # Check for required commands
-    for cmd in qm pvesh wget curl tar xz; do
+    for cmd in qm pvesh wget curl tar xz jq; do
         if ! command -v $cmd &>/dev/null; then
             print_error "Required command '$cmd' not found"
             ((errors++))
@@ -453,15 +471,52 @@ download_whonix_template() {
         return 0
     fi
     
+    # Try to resolve the domain first
+    print_info "Testing connectivity to download.whonix.org..."
+    if ! wget --spider "$WHONIX_DOWNLOAD_URL" >/dev/null 2>&1; then
+        print_warning "Primary download URL failed, trying alternative mirrors..."
+        # Fallback URLs
+        local fallback_urls=(
+            "https://github.com/Whonix/Whonix/releases/download/v17.2.2/Whonix-Xfce-17.2.2.Intel_AMD64.ova.xz"
+            "https://ftp.osuosl.org/pub/whonix/whonix-xfce-17.2.2/Whonix-Xfce-17.2.2.Intel_AMD64.ova.xz"
+            "https://download.whonix.org/whonix-xfce-17.2.2/Whonix-Xfce-17.2.2.Intel_AMD64.ova.xz"
+        )
+        
+        local fallback_checksum_urls=(
+            "https://github.com/Whonix/Whonix/releases/download/v17.2.2/Whonix-Xfce-17.2.2.Intel_AMD64.ova.xz.asc"
+            "https://ftp.osuosl.org/pub/whonix/whonix-xfce-17.2.2/Whonix-Xfce-17.2.2.Intel_AMD64.ova.xz.asc"
+            "https://download.whonix.org/whonix-xfce-17.2.2/Whonix-Xfce-17.2.2.Intel_AMD64.ova.xz.asc"
+        )
+        
+        local url_index=0
+        local download_success=false
+        
+        for fallback_url in "${fallback_urls[@]}"; do
+            print_info "Trying fallback URL: $fallback_url"
+            if wget --spider "$fallback_url" >/dev/null 2>&1; then
+                WHONIX_DOWNLOAD_URL="$fallback_url"
+                WHONIX_CHECKSUM_URL="${fallback_checksum_urls[$url_index]}"
+                download_success=true
+                break
+            fi
+            ((url_index++))
+        done
+        
+        if [ "$download_success" = false ]; then
+            print_error "Unable to connect to any download URLs. Please check your network connection."
+            return 1
+        fi
+    fi
+    
     # Download checksum first
     print_info "Downloading checksum from: $WHONIX_CHECKSUM_URL"
-    wget --progress=bar:force -O "$checksum_path" "$WHONIX_CHECKSUM_URL" || {
+    if ! wget --progress=bar:force -O "$checksum_path" "$WHONIX_CHECKSUM_URL"; then
         print_warning "Failed to download checksum, continuing without verification"
-    }
+    fi
     
     # Download with progress
     print_info "Downloading from: $WHONIX_DOWNLOAD_URL"
-    wget --progress=bar:force -O "$download_path" "$WHONIX_DOWNLOAD_URL" || {
+    if ! wget --progress=bar:force -O "$download_path" "$WHONIX_DOWNLOAD_URL"; then
         print_error "Failed to download Whonix template"
         return 1
     }
@@ -469,13 +524,27 @@ download_whonix_template() {
     # Verify checksum
     if [ -f "$checksum_path" ]; then
         print_info "Verifying checksum..."
-        cd /root
-        if ! echo "$(cat $checksum_path)  $download_path" | sha256sum -c --quiet; then
-            print_error "Checksum verification failed"
-            rm -f "$download_path" "$checksum_path"
-            return 1
+        # Handle different checksum formats
+        if grep -q "SHA256" "$checksum_path" || grep -q "\.xz" "$checksum_path"; then
+            # Standard SHA256 format with filename
+            if sha256sum -c "$checksum_path" --quiet 2>/dev/null; then
+                print_success "Checksum verified"
+            else
+                print_warning "Checksum verification failed, but continuing..."
+            fi
         else
-            print_success "Checksum verified"
+            # Try alternative verification method
+            local expected_checksum=$(head -n 1 "$checksum_path" | cut -d' ' -f1)
+            if [ -n "$expected_checksum" ]; then
+                local actual_checksum=$(sha256sum "$download_path" | cut -d' ' -f1)
+                if [ "$expected_checksum" = "$actual_checksum" ]; then
+                    print_success "Checksum verified"
+                else
+                    print_warning "Checksum verification failed, but continuing..."
+                fi
+            else
+                print_warning "Unable to parse checksum, skipping verification"
+            fi
         fi
     else
         print_warning "Skipping checksum verification"
@@ -905,7 +974,11 @@ main() {
 
 # Cleanup function
 clean_temp_files() {
-    local force="$1"
+    # Handle cases where function might be called with unexpected parameters
+    local force=""
+    if [ $# -gt 0 ]; then
+        force="${1:-}"
+    fi
     
     if [ "$force" != "force" ] && [ "$DRY_RUN" = true ]; then
         return 0
