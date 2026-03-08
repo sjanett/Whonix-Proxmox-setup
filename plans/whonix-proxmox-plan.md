@@ -248,25 +248,3 @@ whonix-proxmox-script/
 └── logs/                          # Log files directory
     └── .gitkeep
 ```
-
-### 11. Security Considerations
-
-1. **Template Verification**: Downloaded templates should be verified against official checksums
-2. **Network Isolation**: Workstation VM should only communicate via Gateway
-3. **Minimal Permissions**: Script requires root but should minimize privilege exposure
-4. **No Hardcoded Credentials**: All configuration via variables
-
-## Next Steps
-
-1. Review and approve this architecture plan
-2. Switch to Code mode for implementation
-3. Create the script with all components
-4. Test on Proxmox VE 9.1.5 environment
-5. Document any issues or improvements
-
-## Questions for Review
-
-- Are the default resource allocations appropriate?
-- Is the network topology correct for your use case?
-- Should we add TPM passthrough support for additional security?
-- Do you need support for multiple Workstation VMs per Gateway?
